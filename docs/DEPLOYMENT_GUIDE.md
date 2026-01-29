@@ -5,13 +5,15 @@ Aegis AI 보안 플랫폼의 배포 방법을 안내합니다.
 ## 목차
 
 1. [시스템 요구사항](#시스템-요구사항)
-2. [로컬 개발 환경](#로컬-개발-환경)
-3. [Docker 배포](#docker-배포)
-4. [프로덕션 배포](#프로덕션-배포)
-5. [환경 변수](#환경-변수)
-6. [보안 설정](#보안-설정)
-7. [모니터링](#모니터링)
-8. [백업 및 복구](#백업-및-복구)
+2. [아키텍처 개요](#아키텍처-개요)
+3. [로컬 개발 환경](#로컬-개발-환경)
+4. [Docker 배포](#docker-배포)
+5. [프로덕션 배포](#프로덕션-배포)
+6. [Nginx/API Gateway 통합](#nginxapi-gateway-통합)
+7. [환경 변수](#환경-변수)
+8. [보안 설정](#보안-설정)
+9. [모니터링](#모니터링)
+10. [백업 및 복구](#백업-및-복구)
 
 ---
 
@@ -39,6 +41,62 @@ Aegis AI 보안 플랫폼의 배포 방법을 안내합니다.
 - ClickHouse (로그 저장, 대규모 환경)
 - Grafana (대시보드)
 - Prometheus (메트릭)
+
+---
+
+## 아키텍처 개요
+
+### Edge vs Core 역할 분담
+
+Aegis는 2-Tier 보안 아키텍처로 설계되었습니다.
+
+| 기능 | Edge (DMZ) | Core (내부망) |
+|------|------------|---------------|
+| Rate Limiting | ✅ 1차 | ❌ |
+| 패턴 기반 탐지 | ✅ 빠른 필터링 | ✅ 정밀 분석 |
+| ML 분석 | ❌ | ✅ |
+| PII 탐지 | ❌ | ✅ |
+| Agent 검증 | ❌ | ✅ |
+| RAG 스캔 | ❌ | ✅ |
+| 감사 로깅 | 기본 | ✅ 상세 |
+| Fail-Open | ✅ Core 장애 시 바이패스 | ❌ |
+
+### 요청 흐름
+
+```
+사용자 요청
+    │
+    ▼
+┌─────────────┐
+│   Nginx/LB  │  ← SSL 종료, 로드밸런싱
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│ Aegis-Edge  │  ← 1차 필터링 (Rate Limit, 패턴)
+│   (DMZ)     │
+└──────┬──────┘
+       │ (망연계)
+       ▼
+┌─────────────┐
+│ Aegis-Core  │  ← 2차 정밀 분석 (ML, PII, Agent)
+│  (내부망)   │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  AI 시스템  │  ← OpenAI, Claude, 자체 LLM 등
+└─────────────┘
+```
+
+### 배포 옵션 선택 가이드
+
+| 환경 | 권장 구성 |
+|------|----------|
+| 개발/테스트 | Core만 단독 실행 |
+| 단일망 (소규모) | Nginx → Core → AI |
+| 망분리 (공공기관) | Nginx → Edge → Core → AI |
+| 대규모 엔터프라이즈 | Nginx → Edge(다중) → Core(다중) → AI |
 
 ---
 
@@ -303,6 +361,399 @@ pm2 start ecosystem.config.js
 pm2 save
 pm2 startup
 ```
+
+---
+
+## Nginx/API Gateway 통합
+
+기존 Nginx나 API Gateway가 있는 환경에서 Aegis를 통합하는 방법입니다.
+
+### 아키텍처 옵션
+
+#### 옵션 1: Nginx → Edge → Core → AI (망분리 환경, 권장)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  DMZ (오픈망)                                                    │
+│                                                                  │
+│  사용자 → Nginx/LB → Aegis-Edge (8080)                          │
+│              │           │                                       │
+│              │           └─── 1차 필터링 (Rate Limit, 패턴)      │
+└──────────────┼───────────────────────────────────────────────────┘
+               │ (망연계)
+┌──────────────▼───────────────────────────────────────────────────┐
+│  업무망 (폐쇄망)                                                  │
+│                                                                  │
+│  Aegis-Core (8081) → AI 시스템 (OpenAI, Claude, etc.)           │
+│        │                                                         │
+│        └─── 2차 정밀 분석 (ML, PII, Agent 검증)                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Nginx 설정:**
+
+```nginx
+# /etc/nginx/conf.d/aegis.conf
+
+upstream aegis_edge {
+    server aegis-edge:8080;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name api.yourcompany.com;
+
+    # SSL 설정
+    ssl_certificate /etc/ssl/certs/yourcompany.crt;
+    ssl_certificate_key /etc/ssl/private/yourcompany.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+
+    # AI 요청 → Aegis Edge로 프록시
+    location /api/ai/ {
+        proxy_pass http://aegis_edge/api/v1/chat;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 타임아웃 설정 (AI 응답 대기)
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+
+    # 검증 전용 API
+    location /api/ai/validate {
+        proxy_pass http://aegis_edge/api/v1/validate;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # 관리 콘솔 (내부 접근만)
+    location /aegis/ {
+        # IP 제한 (내부망만 허용)
+        allow 10.0.0.0/8;
+        allow 192.168.0.0/16;
+        deny all;
+
+        proxy_pass http://aegis-console:3000/;
+    }
+
+    # 헬스 체크
+    location /health {
+        proxy_pass http://aegis_edge/health;
+    }
+}
+```
+
+#### 옵션 2: Nginx → Core만 (단일망, Edge 생략)
+
+망분리가 없는 환경에서는 Edge를 생략하고 Core만 사용할 수 있습니다.
+
+```
+사용자 → Nginx → Aegis-Core (8081) → AI 시스템
+```
+
+```nginx
+# /etc/nginx/conf.d/aegis-simple.conf
+
+upstream aegis_core {
+    server aegis-core:8081;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name api.yourcompany.com;
+
+    ssl_certificate /etc/ssl/certs/yourcompany.crt;
+    ssl_certificate_key /etc/ssl/private/yourcompany.key;
+
+    # AI 요청 검증
+    location /api/ai/chat {
+        # 먼저 Aegis Core로 검증
+        proxy_pass http://aegis_core/api/v1/inspect;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Output 검증
+    location /api/ai/output {
+        proxy_pass http://aegis_core/api/v1/output/analyze;
+        proxy_set_header Host $host;
+    }
+
+    # 관리 콘솔
+    location /aegis/ {
+        allow 10.0.0.0/8;
+        deny all;
+        proxy_pass http://aegis-console:3000/;
+    }
+}
+```
+
+#### 옵션 3: API Gateway (Kong/AWS) → Edge → Core
+
+Kong, AWS API Gateway 등 사용 시:
+
+```yaml
+# Kong 설정 예시 (kong.yml)
+_format_version: "2.1"
+
+services:
+  - name: aegis-ai-service
+    url: http://aegis-edge:8080
+    routes:
+      - name: ai-chat-route
+        paths:
+          - /api/ai/chat
+        methods:
+          - POST
+    plugins:
+      - name: jwt
+        config:
+          secret_is_base64: false
+      - name: rate-limiting
+        config:
+          minute: 60
+          policy: redis
+          redis_host: redis
+
+  - name: aegis-validate-service
+    url: http://aegis-edge:8080
+    routes:
+      - name: ai-validate-route
+        paths:
+          - /api/ai/validate
+        methods:
+          - POST
+```
+
+```yaml
+# AWS API Gateway + Lambda Authorizer 예시
+# serverless.yml
+functions:
+  aiProxy:
+    handler: handler.proxy
+    events:
+      - http:
+          path: /api/ai/{proxy+}
+          method: ANY
+          authorizer:
+            name: jwtAuthorizer
+            type: REQUEST
+    environment:
+      AEGIS_EDGE_URL: http://aegis-edge.internal:8080
+```
+
+### Edge 환경 변수 설정
+
+```env
+# packages/aegis-edge/.env
+
+# 기본 설정
+PORT=8080
+LOG_LEVEL=info
+
+# Core 연결
+CORE_ENDPOINT=http://aegis-core:8081
+
+# Rate Limiting
+RATE_LIMIT_WINDOW_MS=60000
+RATE_LIMIT_MAX_REQUESTS=30
+RATE_LIMIT_BLOCK_DURATION_MS=300000
+
+# Redis (Rate Limiter 공유)
+REDIS_URL=redis://redis:6379
+
+# Fail-Open 설정 (Core 장애 시 AI로 직접 바이패스)
+FAIL_OPEN_ENABLED=true
+FAIL_OPEN_TARGET_URL=https://api.openai.com/v1/chat/completions
+
+# Core 헬스 체크
+CORE_HEALTH_CHECK_INTERVAL_MS=5000
+CORE_HEALTH_CHECK_TIMEOUT_MS=3000
+CORE_FAILURE_THRESHOLD=3
+CORE_RECOVERY_THRESHOLD=2
+```
+
+### Core 환경 변수 설정
+
+```env
+# packages/aegis-core/.env
+
+# 기본 설정
+PORT=8081
+LOG_LEVEL=info
+NODE_ENV=production
+
+# 데이터베이스
+POSTGRES_URL=postgresql://aegis:secret@postgres:5432/aegis
+REDIS_URL=redis://redis:6379
+CLICKHOUSE_URL=http://clickhouse:8123
+
+# CORS (Edge에서만 접근 허용)
+CORS_ORIGINS=http://aegis-edge:8080
+
+# AI 프로바이더 (LLM Proxy 사용 시)
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_KEY=...
+
+# ML 모델
+ML_MODEL_DIR=./ml-models
+ML_ENABLED=true
+```
+
+### 실제 요청 흐름 예시
+
+```
+1. 사용자 → POST https://api.yourcompany.com/api/ai/chat
+   Headers: { "Authorization": "Bearer <jwt>", "Content-Type": "application/json" }
+   Body: { "message": "안녕하세요, 오늘 날씨 어때요?" }
+
+2. Nginx (SSL 종료, JWT 검증)
+   → Aegis-Edge:8080/api/v1/chat
+
+3. Edge (1차 필터링)
+   - Rate Limit 체크 ✓
+   - 기본 패턴 탐지 ✓
+   - X-Aegis-Request-Id 헤더 추가
+   → Aegis-Core:8081/api/v1/inspect
+
+4. Core (2차 정밀 분석)
+   - ML 기반 분류 (정상)
+   - 시맨틱 분석 (정상)
+   - 위험도: 0.1 (Low)
+   → AI 시스템으로 전달
+
+5. AI 시스템 → 응답 생성
+   "오늘 서울 날씨는 맑고 기온은 15도입니다."
+
+6. Core (Output Guard)
+   - PII 탐지: 없음
+   - 민감 데이터: 없음
+   → Edge로 응답 전달
+
+7. Edge → Nginx → 사용자
+   Response: { "response": "오늘 서울 날씨는 맑고 기온은 15도입니다." }
+```
+
+### Docker Compose (Nginx 포함)
+
+```yaml
+# docker-compose.prod.yml
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/ssl:ro
+    depends_on:
+      - aegis-edge
+      - aegis-console
+    networks:
+      - aegis-dmz
+
+  aegis-edge:
+    build:
+      context: .
+      dockerfile: packages/aegis-edge/Dockerfile
+    environment:
+      PORT: "8080"
+      CORE_ENDPOINT: "http://aegis-core:8081"
+      REDIS_URL: "redis://redis:6379"
+      FAIL_OPEN_ENABLED: "true"
+      FAIL_OPEN_TARGET_URL: "${AI_TARGET_URL}"
+    depends_on:
+      - redis
+      - aegis-core
+    networks:
+      - aegis-dmz
+      - aegis-internal
+
+  aegis-core:
+    build:
+      context: .
+      dockerfile: packages/aegis-core/Dockerfile
+    environment:
+      PORT: "8081"
+      POSTGRES_URL: "postgresql://aegis:${DB_PASSWORD}@postgres:5432/aegis"
+      REDIS_URL: "redis://redis:6379"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - aegis-internal
+
+  aegis-console:
+    build:
+      context: .
+      dockerfile: packages/aegis-console/Dockerfile
+    networks:
+      - aegis-dmz
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: "${DB_PASSWORD}"
+      POSTGRES_DB: aegis
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks:
+      - aegis-internal
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    networks:
+      - aegis-dmz
+      - aegis-internal
+
+volumes:
+  pg-data:
+  redis-data:
+
+networks:
+  aegis-dmz:
+    driver: bridge
+  aegis-internal:
+    driver: bridge
+    internal: true  # 외부 접근 차단
+```
+
+### Fail-Open 모드 설명
+
+Core 장애 시 서비스 가용성을 위한 Fail-Open 기능:
+
+```
+정상 상태:
+  사용자 → Edge → Core (검증) → AI → Core (출력검증) → Edge → 사용자
+
+Core 장애 시 (Fail-Open 활성화):
+  사용자 → Edge → AI (직접 바이패스) → Edge → 사용자
+                    │
+                    └─ X-Aegis-Bypassed: true 헤더 추가
+                    └─ 로그 기록 (나중에 감사)
+```
+
+**주의사항:**
+- Fail-Open 시 보안 검증이 생략됩니다
+- 프로덕션에서는 신중하게 사용하세요
+- Core 장애 알림을 반드시 설정하세요
 
 ---
 
