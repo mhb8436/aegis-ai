@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Turbo
+.turbo/
+
+# ML models (large files)
+*.pt
+*.bin
+*.onnx
+*.onnx.data
+*.safetensors
+ml-models/
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# ML cache
+ml/.cache/
+.cache/
+
+# Test files with example secrets
+test-*.mjs
+*.pyc

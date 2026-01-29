@@ -1,0 +1,104 @@
+services:
+  # ─── Aegis Edge (DMZ) ───
+  aegis-edge:
+    build:
+      context: ../..
+      dockerfile: packages/aegis-edge/Dockerfile
+    ports:
+      - "${EDGE_PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: "${EDGE_LOG_LEVEL:-info}"
+      CORE_API_URL: "${CORE_API_URL:-http://aegis-core:8081}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+    depends_on:
+      - redis
+    networks:
+      - aegis-net
+    restart: unless-stopped
+
+  # ─── Aegis Core (업무망) ───
+  aegis-core:
+    build:
+      context: ../..
+      dockerfile: packages/aegis-core/Dockerfile
+    ports:
+      - "${CORE_PORT:-8081}:8081"
+    environment:
+      PORT: "8081"
+      LOG_LEVEL: "${CORE_LOG_LEVEL:-info}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      POSTGRES_URL: "${POSTGRES_URL:-postgresql://aegis:aegis_secret@postgres:5432/aegis}"
+      CLICKHOUSE_URL: "${CLICKHOUSE_URL:-http://clickhouse:8123}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+    depends_on:
+      - postgres
+      - clickhouse
+      - redis
+    networks:
+      - aegis-net
+    restart: unless-stopped
+
+  # ─── Aegis Console ───
+  aegis-console:
+    build:
+      context: ../..
+      dockerfile: packages/aegis-console/Dockerfile
+    ports:
+      - "${CONSOLE_PORT:-3000}:80"
+    depends_on:
+      - aegis-core
+    networks:
+      - aegis-net
+    restart: unless-stopped
+
+  # ─── PostgreSQL (정책 저장소) ───
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-aegis}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-aegis_secret}"
+      POSTGRES_DB: "${POSTGRES_DB:-aegis}"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - aegis-net
+    restart: unless-stopped
+
+  # ─── ClickHouse (감사 로그) ───
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8-alpine
+    environment:
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-default}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-}"
+      CLICKHOUSE_DB: "${CLICKHOUSE_DB:-aegis}"
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    networks:
+      - aegis-net
+    restart: unless-stopped
+
+  # ─── Redis (캐시 / Rate Limiter) ───
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - aegis-net
+    restart: unless-stopped
+
+volumes:
+  pg-data:
+  ch-data:
+  redis-data:
+
+networks:
+  aegis-net:
+    driver: bridge

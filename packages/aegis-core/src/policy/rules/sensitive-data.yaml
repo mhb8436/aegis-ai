@@ -1,0 +1,35 @@
+version: "1.0"
+rules:
+  - id: PII-001
+    name: 주민등록번호
+    pattern: "\\d{6}-?[1-4]\\d{6}"
+    action: mask
+    maskFormat: "******-*******"
+    isActive: true
+
+  - id: PII-002
+    name: 전화번호
+    pattern: "01[0-9]-?\\d{3,4}-?\\d{4}"
+    action: mask
+    maskFormat: "***-****-****"
+    isActive: true
+
+  - id: PII-003
+    name: 이메일
+    pattern: "[\\w.-]+@[\\w.-]+\\.\\w+"
+    action: mask
+    maskFormat: "***@***.***"
+    isActive: true
+
+  - id: PII-004
+    name: 카드번호
+    pattern: "\\d{4}-?\\d{4}-?\\d{4}-?\\d{4}"
+    action: mask
+    maskFormat: "****-****-****-****"
+    isActive: true
+
+  - id: SEN-001
+    name: 내부 IP 주소
+    pattern: "10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"
+    action: block
+    isActive: true

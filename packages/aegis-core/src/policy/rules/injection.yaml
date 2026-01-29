@@ -1,0 +1,56 @@
+version: "1.0"
+rules:
+  - id: INJ-001
+    name: Direct Prompt Injection
+    description: 직접적인 프롬프트 주입 시도 탐지
+    category: direct_injection
+    severity: critical
+    action: block
+    isActive: true
+    priority: 100
+    patterns:
+      - type: regex
+        value: "ignore\\s+(previous|above|all)\\s+(instructions?|prompts?)"
+        flags: i
+      - type: regex
+        value: "disregard\\s+(previous|above|all)"
+        flags: i
+      - type: regex
+        value: "이전\\s*(지시|명령).*무시"
+
+  - id: INJ-002
+    name: Jailbreak Attempt
+    description: 모델 제한 우회 시도
+    category: jailbreak
+    severity: critical
+    action: block
+    isActive: true
+    priority: 100
+    patterns:
+      - type: regex
+        value: "(DAN|developer)\\s*mode"
+        flags: i
+      - type: regex
+        value: "jailbreak"
+        flags: i
+      - type: regex
+        value: "bypass\\s*(filter|safety|restriction)"
+        flags: i
+
+  - id: INJ-003
+    name: Data Exfiltration
+    description: 데이터 유출 유도 시도
+    category: data_exfiltration
+    severity: high
+    action: block
+    isActive: true
+    priority: 90
+    patterns:
+      - type: regex
+        value: "show\\s*(system|initial)\\s*prompt"
+        flags: i
+      - type: regex
+        value: "what\\s*are\\s*your\\s*instructions"
+        flags: i
+      - type: regex
+        value: "프롬프트.*보여"

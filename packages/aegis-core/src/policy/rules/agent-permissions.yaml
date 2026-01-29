@@ -1,0 +1,45 @@
+version: "1.0"
+tools:
+  - name: search
+    allowed: true
+
+  - name: read_file
+    allowed: true
+    restrictions:
+      - paths: ["/data/public/*"]
+        allowed: true
+      - paths: ["/etc/*", "/var/*", "/proc/*"]
+        allowed: false
+
+  - name: database_query
+    allowed: true
+    restrictions:
+      - tables: ["public_*"]
+        operations: ["select"]
+      - tables: ["user_*"]
+        operations: []
+    rateLimit: "10/minute"
+
+  - name: file_read
+    allowed: true
+    restrictions:
+      - paths: ["/data/public/*"]
+        allowed: true
+      - paths: ["/data/private/*"]
+        allowed: false
+
+  - name: file_write
+    allowed: false
+
+  - name: api_call
+    allowed: true
+    whitelist:
+      - "https://api.example.com/*"
+    blacklist:
+      - "*.internal.corp/*"
+
+  - name: shell_execute
+    allowed: false
+
+  - name: email_send
+    allowed: false
