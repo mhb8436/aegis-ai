@@ -50,3 +50,4 @@ ml/.cache/
 # Test files with example secrets
 test-*.mjs
 *.pyc
+CLAUDE.md
