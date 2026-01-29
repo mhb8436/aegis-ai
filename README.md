@@ -26,6 +26,12 @@ Aegis는 오픈망(챗봇) ↔ 폐쇄망(AI Agent/RAG) 분리 환경에서 AI �
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Demo
+
+![Aegis Console Demo](docs/screenshots/aegis-console-demo.gif)
+
+*Security Dashboard와 Policy Rules 관리 화면*
+
 ## Features
 
 ### Aegis-Edge (오픈망)
@@ -62,8 +68,8 @@ Aegis는 오픈망(챗봇) ↔ 폐쇄망(AI Agent/RAG) 분리 환경에서 AI �
 
 ```bash
 # 레포지토리 클론
-git clone https://github.com/crafticsystems/aegis.git
-cd aegis
+git clone https://github.com/mhb8436/aegis-ai.git
+cd aegis-ai
 
 # 의존성 설치
 pnpm install
